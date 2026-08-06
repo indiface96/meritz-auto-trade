@@ -1,0 +1,26 @@
+{
+    "hts_path": "C:\\메리츠증권\\iMERITZ XII\\Main\\imeritz.exe",
+    "accounts": [
+        {
+            "cert_name": "<공인인증서 이름>",
+            "cert_index": 1,
+            "cert_password": "<공인인증서 비밀번호>",
+            "account_no": "<계좌번호 예: 1234-5678-01>",
+            "account_password": "<계좌 비밀번호>"
+        }
+    ],
+    "google_sheet": {
+        "credentials_file": "credentials.json",
+        "spreadsheet_id": "<구글 스프레드시트 ID>"
+    },
+    "test_only": "Y",
+    "speed_multiplier": 1.0,
+    "program_end_time": "07:40",
+    "sheet_names": [
+        {
+            "name": "<시트 이름>",
+            "check_interval_minutes": 10,
+            "trade_end_time": "07:30"
+        }
+    ]
+}

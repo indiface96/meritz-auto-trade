@@ -1,0 +1,19 @@
+# 개인정보 및 민감한 파일
+config.json
+credentials.json
+trader.log
+*.log
+
+# 빌드 결과물
+dist/
+build/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.spec
+
+# 환경 설정
+.env
+venv/
+.venv/
