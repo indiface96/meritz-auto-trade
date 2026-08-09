@@ -26,18 +26,18 @@ logger = logging.getLogger(__name__)
 class AutoTrader:
     def __init__(self):
         self.cfg = load_config()
-        self.start_time = datetime.now()
+        now = datetime.now()
+        self.start_datetime = now
 
         #문자열 형태의 시/분을 입력받아 목표 datetime 객체를 반환합니다.
-        now = datetime.now()
         end_time_str = self.cfg.get("program_end_time", "15:40")
         end_h, end_m = map(int, end_time_str.split(":"))
-        self.target_dt = now.replace(
+        self.target_datetime = now.replace(
             hour=int(end_h), minute=int(end_m), second=0, microsecond=0
         )
         # 설정한 목표 시간이 현재 시간보다 이미 지난 시점이라면 '내일'로 설정
-        if self.target_dt <= now:
-            self.target_dt += timedelta(days=1)
+        if self.target_datetime <= now:
+            self.target_datetime += timedelta(days=1)
 
         gs = self.cfg["google_sheet"]
         self.sheet = GoogleSheetReader(gs["credentials_file"], gs["spreadsheet_id"])
@@ -139,6 +139,7 @@ class AutoTrader:
     def _execute_sheet(self, sheet_name):
         """개별 시트 매매 실행. 현재가가 매수/매도 범위 안이면 True, 밖이면 False 반환"""
         now = datetime.now()
+
         sheet_configs = self.cfg.get("sheet_names", [])
         # 해당 시트 설정 찾기
         end_time_str = "15:30"
@@ -147,13 +148,28 @@ class AutoTrader:
                 end_time_str = sc.get("trade_end_time", "15:30")
                 break
         end_h, end_m = map(int, end_time_str.split(":"))
-        # 시작시간이 종료시간 이전이고, 현재 시간이 종료시간을 넘겼을 때만 스킵
-        start_before_end = (self.start_time.hour < end_h or
-                            (self.start_time.hour == end_h and self.start_time.minute < end_m))
-        now_past_end = (now.hour > end_h or (now.hour == end_h and now.minute >= end_m))
-        if start_before_end and now_past_end:
-            logger.info(f"{sheet_name} 매매 종료시간({end_time_str}) 경과, 스킵")
-            return True  # 종료된 시트는 범위 내로 간주(느린 간격)
+
+        # 1. 종료 시각(end_datetime) 계산
+        # 기본적으로 시작 날짜의 시:분으로 설정
+        end_datetime = self.start_datetime.replace(
+            hour=end_h, minute=end_m, second=0, microsecond=0
+        )
+        # 만약 시작 시각보다 종료 시각(시:분)이 더 작으면 익일 종료로 판단 (+1일)
+        if (self.start_datetime.hour, self.start_datetime.minute) > (end_h, end_m):
+            end_datetime += timedelta(days=1)
+
+        # 2. 현재 시간과의 범위 비교 (now = datetime.now())
+        # 시작 시각 이상이고, 최종 종료 시각 미만일 때만 매매 진행
+        is_trading_time = self.start_datetime <= now < end_datetime
+
+        # 3. 처리
+        if not is_trading_time:
+            # 이틀이 지나든, 종료 시간이 지났든 모두 여기서 걸러집니다.
+            logger.info(f"{sheet_name} 매매 기간/시간 종료({self.start_datetime} ~ {end_datetime}), 스킵")
+            return True
+
+#        logger.info(f"{sheet_name}: start_t = {self.start_datetime} end_t = {end_datetime} is_trading_time = {is_trading_time}")
+
         try:
             self._ensure_hts_ready()
             self.sheet.invalidate_cache(sheet_name)
@@ -189,13 +205,14 @@ class AutoTrader:
         return in_range
 
     def _check_all_ended(self):
+        all_ended = False
+
         now = datetime.now()
+        if now >= self.target_datetime:
+            all_ended = True
 
-        logger.info(f"Now={now}, Target={self.target_dt}")
-
-        if now >= self.target_dt:
-            return True
-        return False
+#        logger.info(f"Now={now}, Target={self.target_datetime}, all_ended = {all_ended}")
+        return all_ended
 
     def _order_price(self, base_price, side):
         """test_only Y: 체결 안되게 20% 여유, N: 실제 가격 사용"""
@@ -434,7 +451,6 @@ class AutoTrader:
         # 즉시 1회 실행 + 다음 실행 시각 설정
         for s in sheets:
             in_range = self._execute_sheet(s["name"])
-            in_range = True
             wait = s["interval"] * 60 if in_range else 5
             s["next_run"] = time.time() + wait
             logger.info(f"{s['name']}: {'범위내' if in_range else '범위밖'} → {wait}초 후 다음 실행")
