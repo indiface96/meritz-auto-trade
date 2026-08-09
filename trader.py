@@ -9,6 +9,9 @@ from meritz_hts import MeritzHTS
 from google_sheet import GoogleSheetReader
 from telegram_notify import TelegramNotifier
 
+from datetime import datetime
+from datetime import timedelta
+
 _file_handler = logging.handlers.RotatingFileHandler(
     "trader.log", maxBytes=1_000_000, backupCount=1, encoding="utf-8"
 )
@@ -22,9 +25,20 @@ logger = logging.getLogger(__name__)
 
 class AutoTrader:
     def __init__(self):
-        from datetime import datetime
         self.cfg = load_config()
         self.start_time = datetime.now()
+
+        #문자열 형태의 시/분을 입력받아 목표 datetime 객체를 반환합니다.
+        now = datetime.now()
+        end_time_str = self.cfg.get("program_end_time", "15:40")
+        end_h, end_m = map(int, end_time_str.split(":"))
+        self.target_dt = now.replace(
+            hour=int(end_h), minute=int(end_m), second=0, microsecond=0
+        )
+        # 설정한 목표 시간이 현재 시간보다 이미 지난 시점이라면 '내일'로 설정
+        if self.target_dt <= now:
+            self.target_dt += timedelta(days=1)
+
         gs = self.cfg["google_sheet"]
         self.sheet = GoogleSheetReader(gs["credentials_file"], gs["spreadsheet_id"])
         self.hts = MeritzHTS(self.cfg.get("hts_path", ""), self.cfg.get("speed_multiplier", 1.0))
@@ -124,7 +138,6 @@ class AutoTrader:
 
     def _execute_sheet(self, sheet_name):
         """개별 시트 매매 실행. 현재가가 매수/매도 범위 안이면 True, 밖이면 False 반환"""
-        from datetime import datetime
         now = datetime.now()
         sheet_configs = self.cfg.get("sheet_names", [])
         # 해당 시트 설정 찾기
@@ -176,16 +189,13 @@ class AutoTrader:
         return in_range
 
     def _check_all_ended(self):
-        """시작시간이 program_end_time을 넘긴 경우에만 종료"""
-        from datetime import datetime
         now = datetime.now()
-        end_time_str = self.cfg.get("program_end_time", "15:40")
-        end_h, end_m = map(int, end_time_str.split(":"))
-        # 시작 시간이 종료시간 이전이고, 현재 시간이 종료시간을 넘겼을 때
-        start_before_end = (self.start_time.hour < end_h or
-                            (self.start_time.hour == end_h and self.start_time.minute < end_m))
-        now_past_end = (now.hour > end_h or (now.hour == end_h and now.minute >= end_m))
-        return start_before_end and now_past_end
+
+        logger.info(f"Now={now}, Target={self.target_dt}")
+
+        if now >= self.target_dt:
+            return True
+        return False
 
     def _order_price(self, base_price, side):
         """test_only Y: 체결 안되게 20% 여유, N: 실제 가격 사용"""
@@ -383,7 +393,6 @@ class AutoTrader:
                 updates["K8"] = current_price_str
             if balance_str is not None:
                 updates["K10"] = balance_str
-            from datetime import datetime
             updates["K4"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if updates:
                 self.sheet.batch_update_cells(sheet_name, updates)
@@ -422,15 +431,16 @@ class AutoTrader:
                 interval = self.cfg.get("check_interval_minutes", 5)
             sheets.append({"name": name, "interval": interval})
 
-        from datetime import datetime
         # 즉시 1회 실행 + 다음 실행 시각 설정
         for s in sheets:
             in_range = self._execute_sheet(s["name"])
+            in_range = True
             wait = s["interval"] * 60 if in_range else 5
             s["next_run"] = time.time() + wait
             logger.info(f"{s['name']}: {'범위내' if in_range else '범위밖'} → {wait}초 후 다음 실행")
 
         while True:
+            time.sleep(wait)
             if self._check_all_ended():
                 logger.info("모든 시트 매매 종료시간 경과, HTS 종료")
                 self.hts.close_hts()
@@ -442,4 +452,3 @@ class AutoTrader:
                     wait = s["interval"] * 60 if in_range else 5
                     s["next_run"] = now + wait
                     logger.info(f"{s['name']}: {'범위내' if in_range else '범위밖'} → {wait}초 후 다음 실행")
-            time.sleep(1)
